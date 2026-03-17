@@ -12,7 +12,7 @@ from telegram.ext import (
     ContextTypes
 )
 
-TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+TOKEN = "8645355488:AAGncQJCay8CjRcDLUd9gOSAuH337swNOnE"
 
 API_URL = "https://axbweb-46106131f4b2.herokuapp.com/waifus"
 
