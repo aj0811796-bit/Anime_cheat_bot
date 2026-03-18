@@ -16,7 +16,7 @@ from telegram.ext import (
 # --- CONFIG ---
 TOKEN = "8443836199:AAFL0I4sWrl-tL59ejQmCQcW-uNbrEuSFKo"
 API_URL = "https://axbweb-46106131f4b2.herokuapp.com/waifus"
-# SauceNAO API for backup (AI/Custom images)
+# Global AI Search API
 SAUCENAO_URL = "https://saucenao.com/search.php?db=999&output_type=2&numres=1&url="
 
 hash_db = []
@@ -25,108 +25,115 @@ hash_db = []
 
 def get_hash(url):
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=5)
         img = Image.open(BytesIO(res.content)).convert("RGB")
         return imagehash.phash(img)
     except:
         return None
 
 def load_database():
-    print("📊 Loading Friend's Database...")
+    print("🔄 Syncing with Friend's Database...")
     try:
-        res = requests.get(API_URL)
+        res = requests.get(API_URL, timeout=10)
         data = res.json()
         for char in data:
+            # We use the provided image URL to create a local match map
             h = get_hash(char["image"])
             if h:
                 hash_db.append({"hash": h, "name": char["name"], "anime": char["anime"]})
-        print(f"✅ Database ready: {len(hash_db)}")
-    except Exception as e:
-        print(f"❌ Error loading API: {e}")
+        print(f"✅ Private API Ready: {len(hash_db)} characters")
+    except:
+        print("⚠️ Private API Offline. Running in AI-ONLY mode.")
 
-# ---------------- SEARCH LOGIC ----------------
+# ---------------- AI RECOGNITION ----------------
 
-def find_in_db(target_hash):
-    best = None
-    min_diff = 100
-    for item in hash_db:
-        diff = target_hash - item["hash"]
-        if diff < min_diff:
-            min_diff = diff
-            best = item
-    return best if min_diff < 10 else None
-
-async def search_backup_ai(image_url):
+async def fetch_ai_guess(image_url):
+    """This function searches the entire internet for the character name."""
     try:
-        res = requests.get(f"{SAUCENAO_URL}{image_url}")
+        res = requests.get(f"{SAUCENAO_URL}{image_url}", timeout=10)
         data = res.json()
         if data["results"]:
-            result = data["results"][0]
-            name = result["data"].get("character") or result["data"].get("title") or "Unknown"
-            source = result["data"].get("source") or "Web/AI"
-            return {"name": name, "anime": source, "method": "AI Guess 🤖"}
+            top = data["results"][0]
+            return {
+                "name": top["data"].get("character") or top["data"].get("title") or "Unknown",
+                "source": top["data"].get("source") or "Anime/Fanart",
+                "prob": top["header"]["similarity"]
+            }
     except:
         return None
-    return None
 
-# ---------------- HANDLERS ----------------
+# ---------------- COMMANDS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
+    
     keyboard = [
-        [InlineKeyboardButton("SUPPORT CHANNEL ↗️", url="https://t.me/your_channel")],
-        [InlineKeyboardButton("DEVELOPER ↗️", url="https://t.me/aj0811796-bit")]
+        [InlineKeyboardButton("📢 UPDATES", url="https://t.me/your_channel")],
+        [InlineKeyboardButton("👨‍💻 DEVELOPER", url="https://t.me/aj0811796_bit")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     start_text = (
-        f"📊 `{user_name}`\n"
-        f"HEY {user_name.upper()} 👋\n\n"
-        "**HYBRID ANIME CHEAT BOT**\n\n"
-        "I USE A PRIVATE API + AI SEARCH\n"
-        "TO FIND ANY CHARACTER INSTANTLY.\n"
+        f"📊 `{user_name.upper()}`\n\n"
+        "**ALPHA X UNIVERSAL AI** 🤖\n"
         "__________________________\n\n"
-        "**COMMANDS**\n\n"
-        "`/waifu` → FIND CHARACTER\n"
-        "**OR SEND IMAGE DIRECTLY**\n"
+        "I can identify **ANY** character from\n"
+        "**ANY** bot using Hybrid AI Search.\n\n"
+        "🔹 **PRIVATE API:** Instant Match\n"
+        "🔹 **GLOBAL AI:** Internet Search\n"
         "__________________________\n\n"
-        "**POWERED BY PRIVATE API & AI ⚡**"
+        "**SEND A PHOTO TO START**"
     )
-    await update.message.reply_text(start_text, reply_markup=reply_markup, parse_mode='Markdown')
+    await update.message.reply_text(start_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def process_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1] if update.message.photo else update.message.reply_to_message.photo[-1]
-    status = await update.message.reply_text("Scanning databases... 🔍")
+async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Support both direct images and replies
+    msg = update.message if update.message.photo else update.message.reply_to_message
+    if not msg or not msg.photo: return
+    
+    photo = msg.photo[-1]
+    status = await update.message.reply_text("📡 `SCANNING MULTI-VERSE...`")
 
-    # 1. Try Friend's API first (Local Hash)
+    # Step 1: Download and Hash
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
     img = Image.open(BytesIO(file_bytes)).convert("RGB")
-    target_hash = imagehash.phash(img)
+    user_hash = imagehash.phash(img)
 
-    match = find_in_db(target_hash)
+    # Step 2: Check Friend's API (Instant)
+    match = None
+    for item in hash_db:
+        if (user_hash - item["hash"]) < 10:
+            match = item
+            break
 
     if match:
         await status.edit_text(
-            f"🎯 **API MATCH FOUND!**\n\n"
-            f"🎭 **Name:** `{match['name']}`\n"
-            f"📺 **Anime:** `{match['anime']}`",
+            f"✅ **DATABASE MATCH**\n"
+            f"__________________________\n\n"
+            f"👤 **NAME:** `{match['name']}`\n"
+            f"📺 **ANIME:** `{match['anime']}`\n"
+            f"__________________________\n"
+            f"⚡ *Source: Private API*",
             parse_mode='Markdown'
         )
     else:
-        # 2. If API fails, try AI Backup (SauceNAO)
-        await status.edit_text("Not in API. Trying AI Search... 🌐")
-        ai_match = await search_backup_ai(file.file_path)
-
-        if ai_match:
+        # Step 3: Trigger AI Search (The "Cheat" for other bots)
+        await status.edit_text("🔍 `NOT IN API. TRIGGERING GLOBAL AI...`")
+        ai_res = await fetch_ai_guess(file.file_path)
+        
+        if ai_res and float(ai_res['prob']) > 60:
             await status.edit_text(
-                f"🤖 **AI GUESS (Backup):**\n\n"
-                f"🎭 **Name:** `{ai_match['name']}`\n"
-                f"📺 **Source:** `{ai_match['anime']}`",
+                f"🤖 **AI IDENTIFIED**\n"
+                f"__________________________\n\n"
+                f"👤 **NAME:** `{ai_res['name']}`\n"
+                f"📺 **SOURCE:** `{ai_res['source']}`\n"
+                f"📈 **CONFIDENCE:** `{ai_res['prob']}%`\n"
+                f"__________________________\n"
+                f"💡 *Tip: Tap name to copy*",
                 parse_mode='Markdown'
             )
         else:
-            await status.edit_text("❌ Character not found in API or AI Database.")
+            await status.edit_text("❌ `CHARACTER UNKNOWN TO ALL SYSTEMS`")
 
 # ---------------- MAIN ----------------
 
@@ -134,9 +141,8 @@ if __name__ == '__main__':
     load_database()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("waifu", process_image))
-    app.add_handler(CommandHandler("name", process_image))
-    app.add_handler(MessageHandler(filters.PHOTO, process_image))
+    app.add_handler(MessageHandler(filters.PHOTO, on_image))
+    app.add_handler(CommandHandler("waifu", on_image))
     
-    print("🚀 Hybrid Bot is Running on StackHost!")
+    print("🚀 Universal AI Bot is Active!")
     app.run_polling()
