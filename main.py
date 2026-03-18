@@ -1,6 +1,9 @@
 import requests
 from PIL import Image
+import imagehash
 from io import BytesIO
+import json
+import os
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,106 +15,138 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- CONFIGURATION ---
+# --- SETTINGS ---
 TOKEN = "8443836199:AAFL0I4sWrl-tL59ejQmCQcW-uNbrEuSFKo"
-# We use SauceNAO as the "Search Engine" to get the text answer
-SAUCENAO_URL = "https://saucenao.com/search.php?db=999&output_type=2&numres=1&url="
+FRIEND_API = "https://axbweb-46106131f4b2.herokuapp.com/waifus"
+DB_FILE = "local_db.json"
 
-# ---------------- SEARCH ENGINE ----------------
+# Enable logging
+logging.basicConfig(level=logging.INFO)
 
-async def auto_search_web(image_url):
-    """
-    This function acts like a 'Google Search' in the background.
-    It sends the image to a global AI and returns the text result.
-    """
+# Load Local Database
+if os.path.exists(DB_FILE):
+    with open(DB_FILE, "r") as f:
+        local_memory = json.load(f)
+else:
+    local_memory = []
+
+api_cache = []
+
+# --- HELPERS ---
+
+def save_local():
+    with open(DB_FILE, "w") as f:
+        json.dump(local_memory, f)
+
+def get_hash_from_url(url):
     try:
-        # Search the web for this specific image
-        res = requests.get(f"{SAUCENAO_URL}{image_url}", timeout=15)
-        data = res.json()
-        
-        if data and "results" in data and len(data["results"]) > 0:
-            result = data["results"][0]
-            # Extract the specific character and anime names
-            char_name = result["data"].get("character") or result["data"].get("title") or "Unknown"
-            anime_source = result["data"].get("source") or "Anime/Fanart"
-            confidence = result["header"].get("similarity", "0")
-            
-            return {
-                "name": char_name,
-                "anime": anime_source,
-                "confidence": confidence
-            }
-    except Exception as e:
-        print(f"Search Error: {e}")
-    return None
+        res = requests.get(url, timeout=5)
+        img = Image.open(BytesIO(res.content)).convert("RGB")
+        return str(imagehash.phash(img))
+    except:
+        return None
 
-# ---------------- COMMANDS ----------------
+def load_friend_api():
+    global api_cache
+    print("🔄 Fetching Friend's API...")
+    try:
+        res = requests.get(FRIEND_API, timeout=10)
+        data = res.json()
+        for char in data:
+            h = get_hash_from_url(char["image"])
+            if h:
+                api_cache.append({"hash": h, "name": char["name"], "anime": char["anime"]})
+        print(f"✅ Friend API Loaded: {len(api_cache)}")
+    except Exception as e:
+        print(f"❌ Friend API Error: {e}")
+
+# --- COMMANDS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     
     keyboard = [
-        [InlineKeyboardButton("📢 UPDATES", url="https://t.me/your_channel")],
-        [InlineKeyboardButton("👤 DEVELOPER", url="https://t.me/aj0811796-bit")]
+        [InlineKeyboardButton("SUPPORT CHANNEL ↗️", url="https://t.me/your_channel")],
+        [InlineKeyboardButton("DEVELOPER ↗️", url="https://t.me/aj0811796_bit")]
     ]
     
     start_text = (
-        f"📊 `{user_name.upper()}`\n\n"
-        "**ALPHA X AUTO-SEARCH AI** 🤖\n"
+        f"📊 `{user_name.upper()}`\n"
+        f"HEY {user_name.upper()} 👋\n\n"
+        "**WELCOME TO ANIME CHEAT BOT**\n\n"
+        "I CHECK MY FRIEND'S API AND YOUR\n"
+        "PRIVATE DATABASE FOR MATCHES!\n"
         "__________________________\n\n"
-        "I DON'T NEED A DATABASE.\n"
-        "SEND ME ANY ANIME IMAGE OR FAN-ART,\n"
-        "AND I WILL SEARCH THE WEB FOR YOU!\n"
+        "**COMMANDS**\n\n"
+        "`/waifu` → REPLY TO IMAGE\n"
+        "`/add Name | Anime` → REPLY TO ADD\n"
         "__________________________\n\n"
-        "**JUST SEND THE PHOTO TO START**"
+        "**FAST • HYBRID • POWERED ⚡**"
     )
-    await update.message.reply_text(
-        start_text, 
-        reply_markup=InlineKeyboardMarkup(keyboard), 
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(start_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def handle_image_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Support both direct photos and replies
-    msg = update.message if update.message.photo else update.message.reply_to_message
-    if not msg or not msg.photo:
+async def add_character(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Only you or authorized users should use this
+    if not update.message.reply_to_message or not update.message.reply_to_message.photo:
+        await update.message.reply_text("❌ Reply to a photo with: `/add Name | Anime`")
         return
 
-    # Use the highest quality version of the photo
+    try:
+        raw_data = " ".join(context.args).split("|")
+        name = raw_data[0].strip()
+        anime = raw_data[1].strip()
+
+        photo = update.message.reply_to_message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Hash the image
+        img_data = await file.download_as_bytearray()
+        img = Image.open(BytesIO(img_data)).convert("RGB")
+        h = str(imagehash.phash(img))
+
+        local_memory.append({"hash": h, "name": name, "anime": anime})
+        save_local()
+        await update.message.reply_text(f"✅ **ADDED TO LOCAL DB:** `{name}`")
+    except:
+        await update.message.reply_text("❌ Format: `/add Name | Anime` (Use the | symbol)")
+
+async def identify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message if update.message.photo else update.message.reply_to_message
+    if not msg or not msg.photo: return
+
     photo = msg.photo[-1]
-    status_msg = await update.message.reply_text("📡 `SEARCHING GLOBAL WEB...`", parse_mode='Markdown')
-
-    # 1. Get the direct image path from Telegram
     file = await context.bot.get_file(photo.file_id)
-    image_url = file.file_path
+    img_data = await file.download_as_bytearray()
+    img = Image.open(BytesIO(img_data)).convert("RGB")
+    user_hash = imagehash.phash(img)
 
-    # 2. Perform the Background Search
-    result = await auto_search_web(image_url)
+    # Search Local First, then Friend API
+    match = None
+    all_data = local_memory + api_cache
 
-    if result and float(result['confidence']) > 55:
-        # 3. Deliver the text answer directly
-        response = (
-            f"✅ **CHARACTER IDENTIFIED**\n"
-            f"__________________________\n\n"
-            f"👤 **NAME:** `{result['name']}`\n"
-            f"📺 **ANIME:** `{result['anime']}`\n\n"
-            f"📈 **MATCH:** `{result['confidence']}%` Accuracy\n"
-            f"__________________________\n\n"
-            f"💡 *Tap name to copy instantly!*"
+    for item in all_data:
+        diff = user_hash - imagehash.hex_to_hash(item["hash"])
+        if diff < 10:
+            match = item
+            break
+
+    if match:
+        await update.message.reply_text(
+            f"🎯 **MATCH FOUND!**\n\n🎭 **Name:** `{match['name']}`\n📺 **Anime:** `{match['anime']}`",
+            parse_mode='Markdown'
         )
-        await status_msg.edit_text(response, parse_mode='Markdown')
     else:
-        await status_msg.edit_text("❌ `SORRY, NO MATCH FOUND ON THE WEB.`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Not found in API or Local DB.")
 
-# ---------------- RUN BOT ----------------
+# --- RUN ---
 
 if __name__ == '__main__':
+    load_friend_api()
     app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_image_search))
-    app.add_handler(CommandHandler("waifu", handle_image_search))
-    app.add_handler(CommandHandler("name", handle_image_search))
     
-    print("🚀 Auto-Search Bot is LIVE on StackHost!")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add_character))
+    app.add_handler(CommandHandler("waifu", identify))
+    app.add_handler(MessageHandler(filters.PHOTO, identify))
+    
     app.run_polling()
