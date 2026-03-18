@@ -13,14 +13,15 @@ from telegram.ext import (
     ContextTypes
 )
 
-# Enable logging
-logging.basicConfig(level=logging.INFO)
-
-# --- SETTINGS ---
+# --- CONFIG ---
 TOKEN = "8443836199:AAFL0I4sWrl-tL59ejQmCQcW-uNbrEuSFKo"
 API_URL = "https://axbweb-46106131f4b2.herokuapp.com/waifus"
+# SauceNAO API for backup (AI/Custom images)
+SAUCENAO_URL = "https://saucenao.com/search.php?db=999&output_type=2&numres=1&url="
 
 hash_db = []
+
+# ---------------- DATABASE LOAD ----------------
 
 def get_hash(url):
     try:
@@ -31,23 +32,21 @@ def get_hash(url):
         return None
 
 def load_database():
-    print("🔄 Fetching API database...")
+    print("📊 Loading Friend's Database...")
     try:
         res = requests.get(API_URL)
         data = res.json()
         for char in data:
             h = get_hash(char["image"])
             if h:
-                hash_db.append({
-                    "hash": h,
-                    "name": char["name"],
-                    "anime": char["anime"]
-                })
+                hash_db.append({"hash": h, "name": char["name"], "anime": char["anime"]})
         print(f"✅ Database ready: {len(hash_db)}")
     except Exception as e:
-        print(f"❌ Error loading DB: {e}")
+        print(f"❌ Error loading API: {e}")
 
-def find_match(target_hash):
+# ---------------- SEARCH LOGIC ----------------
+
+def find_in_db(target_hash):
     best = None
     min_diff = 100
     for item in hash_db:
@@ -55,78 +54,89 @@ def find_match(target_hash):
         if diff < min_diff:
             min_diff = diff
             best = item
-    if min_diff < 10:
-        return best
+    return best if min_diff < 10 else None
+
+async def search_backup_ai(image_url):
+    try:
+        res = requests.get(f"{SAUCENAO_URL}{image_url}")
+        data = res.json()
+        if data["results"]:
+            result = data["results"][0]
+            name = result["data"].get("character") or result["data"].get("title") or "Unknown"
+            source = result["data"].get("source") or "Web/AI"
+            return {"name": name, "anime": source, "method": "AI Guess 🤖"}
+    except:
+        return None
     return None
 
-# --- COMMANDS ---
+# ---------------- HANDLERS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This gets the name of the person who clicked start
     user_name = update.effective_user.first_name
-    
     keyboard = [
         [InlineKeyboardButton("SUPPORT CHANNEL ↗️", url="https://t.me/your_channel")],
-        [InlineKeyboardButton("UPDATE GROUP ↗️", url="https://t.me/your_group")],
-        [InlineKeyboardButton("DEVELOPER ↗️", url="https://t.me/EGOIST_6969")]
+        [InlineKeyboardButton("DEVELOPER ↗️", url="https://t.me/aj0811796-bit")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Personalized start message
     start_text = (
-        f"📊 `{user_name}`\n"  # This puts the user's name at the top in monospace
+        f"📊 `{user_name}`\n"
         f"HEY {user_name.upper()} 👋\n\n"
-        "**WELCOME TO ANIME CHEAT BOT**\n\n"
-        "I CAN HELP YOU FIND\n"
-        "ANIME WAIFU & CHARACTER NAMES FROM\n"
-        "IMAGES.\n"
+        "**HYBRID ANIME CHEAT BOT**\n\n"
+        "I USE A PRIVATE API + AI SEARCH\n"
+        "TO FIND ANY CHARACTER INSTANTLY.\n"
         "__________________________\n\n"
         "**COMMANDS**\n\n"
-        "`/waifu` → REPLY TO ANIME IMAGE\n"
-        "`/name`  → GET CHARACTER NAME\n"
-        "**OR SEND AN IMAGE DIRECTLY**\n"
+        "`/waifu` → FIND CHARACTER\n"
+        "**OR SEND IMAGE DIRECTLY**\n"
         "__________________________\n\n"
-        "**FAST • ANIME • POWERED ⚡**"
+        "**POWERED BY PRIVATE API & AI ⚡**"
     )
+    await update.message.reply_text(start_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    await update.message.reply_text(
-        start_text,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+async def process_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1] if update.message.photo else update.message.reply_to_message.photo[-1]
+    status = await update.message.reply_text("Scanning databases... 🔍")
 
-async def process_image(update, context, photo):
+    # 1. Try Friend's API first (Local Hash)
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
     img = Image.open(BytesIO(file_bytes)).convert("RGB")
     target_hash = imagehash.phash(img)
-    result = find_match(target_hash)
 
-    if result:
-        await update.message.reply_text(
-            f"🎭 **Name:** `{result['name']}`\n📺 **Anime:** `{result['anime']}`",
+    match = find_in_db(target_hash)
+
+    if match:
+        await status.edit_text(
+            f"🎯 **API MATCH FOUND!**\n\n"
+            f"🎭 **Name:** `{match['name']}`\n"
+            f"📺 **Anime:** `{match['anime']}`",
             parse_mode='Markdown'
         )
     else:
-        await update.message.reply_text("❌ Character not found.")
+        # 2. If API fails, try AI Backup (SauceNAO)
+        await status.edit_text("Not in API. Trying AI Search... 🌐")
+        ai_match = await search_backup_ai(file.file_path)
 
-async def waifu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.reply_to_message and update.message.reply_to_message.photo:
-        await process_image(update, context, update.message.reply_to_message.photo[-1])
-    else:
-        await update.message.reply_text("Reply to an image with /waifu.")
+        if ai_match:
+            await status.edit_text(
+                f"🤖 **AI GUESS (Backup):**\n\n"
+                f"🎭 **Name:** `{ai_match['name']}`\n"
+                f"📺 **Source:** `{ai_match['anime']}`",
+                parse_mode='Markdown'
+            )
+        else:
+            await status.edit_text("❌ Character not found in API or AI Database.")
 
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await process_image(update, context, update.message.photo[-1])
-
-# --- MAIN ---
+# ---------------- MAIN ----------------
 
 if __name__ == '__main__':
     load_database()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("waifu", waifu_cmd))
-    app.add_handler(CommandHandler("name", waifu_cmd))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    app.add_handler(CommandHandler("waifu", process_image))
+    app.add_handler(CommandHandler("name", process_image))
+    app.add_handler(MessageHandler(filters.PHOTO, process_image))
     
+    print("🚀 Hybrid Bot is Running on StackHost!")
     app.run_polling()
